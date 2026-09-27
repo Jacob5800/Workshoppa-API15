@@ -4,7 +4,7 @@ Workshoppa version 9.3.1.0, built for Dalamud API 15. This continuation includes
 
 ## Credit and permission
 
-Original plugin by Liza Carvelli. This API 15 continuation build is redistributed with permission from the original author.
+Original plugin by Liza Carvelli.
 
 ## Install
 
