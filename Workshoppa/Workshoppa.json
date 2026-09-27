@@ -1,0 +1,8 @@
+﻿{
+  "Name": "Workshoppa",
+  "Author": "Liza Carvelli",
+  "Punchline": "Better Company Workshop Turn-In",
+  "Description": "Dalamud API 15 continuation of Workshoppa. Automates workshop material turn-ins and can skip cutscenes between production phases.",
+  "RepoUrl": "https://github.com/Jacob5800/Workshoppa-API15",
+  "IconUrl": "https://plugins.carvel.li/icons/Workshoppa.png"
+}

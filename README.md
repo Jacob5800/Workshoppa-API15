@@ -1,6 +1,6 @@
 # Workshoppa API 15
 
-A binary-only custom Dalamud feed for Workshoppa version 9.3.0.0, built for Dalamud API 15.
+Workshoppa version 9.3.1.0, built for Dalamud API 15. This continuation includes the plugin source and automatically offers to skip the short cutscenes between workshop production phases.
 
 ## Credit and permission
 
@@ -18,6 +18,8 @@ Original plugin by Liza Carvelli. This API 15 continuation build is redistribute
 - /buy-tanks buys a requested number of ceruleum tank stacks.
 - /fill-tanks fills inventory with a requested number of ceruleum tank stacks.
 
-## Package scope
+## Build from source
 
-This repository contains the API 15 install payload only; source files were not available for this distribution. Workshoppa was confirmed to load in a current Dalamud API 15 game session, but its full feature set has not been exhaustively tested here.
+Open `Workshoppa.sln` with the Dalamud API 15 development SDK installed, or build `Workshoppa/Workshoppa.csproj` in Release configuration. The install package is published at the repository root and referenced by `repo.json`.
+
+The workshop transition cutscene skip is armed only after choosing an advance or completion option. It opens and confirms the game's own skip dialog while that transition is pending.
