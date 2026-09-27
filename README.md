@@ -1,6 +1,6 @@
 # Workshoppa API 15
 
-Workshoppa version 9.3.1.0, built for Dalamud API 15. This continuation includes the plugin source and automatically offers to skip the short cutscenes between workshop production phases.
+Workshoppa version 9.3.2.0, built for Dalamud API 15. This continuation includes the plugin source and automatically skips the short cutscenes between workshop production phases when the game exposes its skip prompt.
 
 ## Credit and permission
 

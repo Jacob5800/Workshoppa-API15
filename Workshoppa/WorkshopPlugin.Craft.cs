@@ -45,11 +45,18 @@ partial class WorkshopPlugin
         var now = DateTime.Now;
         if (now >= _workshopTransitionCutsceneSkipExpiresAt)
         {
+            _pluginLog.Warning("Workshop transition cutscene skip request expired before the skip prompt appeared");
             ClearWorkshopTransitionCutsceneSkip();
             return;
         }
 
-        if (!_condition[ConditionFlag.WatchingCutscene] ||
+        // WatchingCutscene (58) is not the flag used by all of the game's current cutscene paths.
+        // The UI builder considers OccupiedInCutSceneEvent and WatchingCutscene78 the active
+        // cutscene conditions, so accept those as well for the workshop transition scenes.
+        bool isWatchingCutscene = _condition[ConditionFlag.WatchingCutscene] ||
+                                  _condition[ConditionFlag.WatchingCutscene78] ||
+                                  _condition[ConditionFlag.OccupiedInCutSceneEvent];
+        if (!isWatchingCutscene ||
             _workshopTransitionCutsceneSkipRequested ||
             now < _nextWorkshopTransitionCutsceneSkipAttempt)
             return;
