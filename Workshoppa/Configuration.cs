@@ -15,6 +15,7 @@ internal sealed class Configuration : IPluginConfiguration
     public List<QueuedItem> ItemQueue { get; set; } = new();
     public bool EnableRepairKitCalculator { get; set; } = true;
     public bool EnableCeruleumTankCalculator { get; set; } = true;
+    public List<uint> RetainerDepositExcludedItemIds { get; set; } = new();
     public List<Preset> Presets { get; set; } = new();
 
     public WindowConfig MainWindowConfig { get; } = new();

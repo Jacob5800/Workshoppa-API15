@@ -45,6 +45,7 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
     private readonly ConfigWindow _configWindow;
     private readonly RepairKitWindow _repairKitWindow;
     private readonly CeruleumTankWindow _ceruleumTankWindow;
+    private readonly RetainerDepositWindow _retainerDepositWindow;
 
     private Stage _currentStageInternal = Stage.Stopped;
     private DateTime _continueAt = DateTime.MinValue;
@@ -71,8 +72,10 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
         _workshopCache = new WorkshopCache(dataManager, _pluginLog);
         _gameStrings = new(dataManager, _pluginLog);
 
+        _retainerDepositWindow = new(_pluginInterface, _gameGui, dataManager, _configuration, _pluginLog);
         _mainWindow = new(this, _pluginInterface, _clientState, _objectTable, _configuration, _workshopCache,
-            new IconCache(textureProvider), _chatGui, new RecipeTree(dataManager, _pluginLog), _pluginLog);
+            new IconCache(textureProvider), _chatGui, new RecipeTree(dataManager, _pluginLog), _pluginLog,
+            _retainerDepositWindow);
         _windowSystem.AddWindow(_mainWindow);
         _configWindow = new(_pluginInterface, _configuration);
         _windowSystem.AddWindow(_configWindow);
@@ -82,6 +85,7 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
         _ceruleumTankWindow = new(_pluginLog, _gameGui, addonLifecycle, _configuration,
             _externalPluginHandler, _chatGui);
         _windowSystem.AddWindow(_ceruleumTankWindow);
+        _windowSystem.AddWindow(_retainerDepositWindow);
 
         _pluginInterface.UiBuilder.Draw += _windowSystem.Draw;
         _pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
@@ -133,6 +137,9 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
 
     private void FrameworkUpdate(IFramework framework)
     {
+        _retainerDepositWindow.UpdateRetainerWindowState();
+        _retainerDepositWindow.UpdateTransfer();
+
         TrySkipWorkshopTransitionCutscene();
 
         if (!_clientState.IsLoggedIn ||
@@ -312,6 +319,7 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
 
         _ceruleumTankWindow.Dispose();
         _repairKitWindow.Dispose();
+        _retainerDepositWindow.StopTransfer();
 
         _externalPluginHandler.RestoreTextAdvance();
         _externalPluginHandler.Restore();

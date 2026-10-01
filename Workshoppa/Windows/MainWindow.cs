@@ -35,6 +35,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
     private readonly IChatGui _chatGui;
     private readonly RecipeTree _recipeTree;
     private readonly IPluginLog _pluginLog;
+    private readonly RetainerDepositWindow _retainerDepositWindow;
 
     private string _searchString = string.Empty;
     private bool _checkInventory;
@@ -42,7 +43,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
 
     public MainWindow(WorkshopPlugin plugin, IDalamudPluginInterface pluginInterface, IClientState clientState,
         IObjectTable objectTable, Configuration configuration, WorkshopCache workshopCache, IconCache iconCache, IChatGui chatGui,
-        RecipeTree recipeTree, IPluginLog pluginLog)
+        RecipeTree recipeTree, IPluginLog pluginLog, RetainerDepositWindow retainerDepositWindow)
         : base("Workshoppa###WorkshoppaMainWindow")
     {
         _plugin = plugin;
@@ -55,6 +56,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
         _chatGui = chatGui;
         _recipeTree = recipeTree;
         _pluginLog = pluginLog;
+        _retainerDepositWindow = retainerDepositWindow;
 
         Position = new Vector2(100, 100);
         PositionCondition = ImGuiCond.FirstUseEver;
@@ -85,6 +87,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
             ImGui.BeginDisabled(_plugin.CurrentStage != Stage.Stopped);
             DrawPresetsMenu();
             DrawClipboardMenu();
+            DrawToolsMenu();
             ImGui.EndDisabled();
 
             ImGui.EndMenuBar();
@@ -492,6 +495,17 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
 
             ImGui.EndMenu();
         }
+    }
+
+    private void DrawToolsMenu()
+    {
+        if (!ImGui.BeginMenu("Tools"))
+            return;
+
+        if (ImGui.MenuItem("Retainer Depositor / Exclusions"))
+            _retainerDepositWindow.ToggleFromMenu();
+
+        ImGui.EndMenu();
     }
 
     /// <summary>
