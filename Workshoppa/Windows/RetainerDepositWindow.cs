@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 7599)
-Total output lines: 745
-
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -212,7 +209,352 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
         if (!IsRetainerTransferWindowReady())
         {
-            _status = "Waiting for the retainer inve…3599 tokens truncated…yItem* inventoryItem = container->GetInventorySlot(slotIndex);
+            _status = "Waiting for the retainer inventory screen to finish loading…";
+            return;
+        }
+
+        if (TryFindNextMove(inventoryManager, out PendingMove nextMove))
+        {
+            AgentModule* agentModule = AgentModule.Instance();
+            AgentRetainer* retainerAgent = agentModule == null
+                ? null
+                : (AgentRetainer*)agentModule->GetAgentByInternalId(AgentId.Retainer);
+            if (retainerAgent == null || !retainerAgent->IsAgentActive())
+            {
+                StopTransfer("Stopped because the game's retainer item-action agent is unavailable.");
+                return;
+            }
+
+            _pendingMove = nextMove;
+            _pendingSince = DateTime.UtcNow;
+            _observedMoveQuantity = 0;
+            _observedMoveMissingAt = DateTime.MinValue;
+            try
+            {
+                retainerAgent->HandleCallback(nextMove.SourceSlot, nextMove.SourceType, default,
+                    EntrustToRetainerCallback);
+            }
+            catch (Exception ex)
+            {
+                _pluginLog.Error(ex, "Failed to invoke the game's retainer entrust action.");
+                StopTransfer("Stopped because the game's retainer entrust action could not be invoked.");
+                return;
+            }
+
+            string itemName = _items.TryGetValue(nextMove.ItemId, out var itemDetails)
+                ? itemDetails.Name
+                : $"item {nextMove.ItemId}";
+            _status = $"Requesting deposit for {itemName}…";
+            return;
+        }
+
+        if (CountEligibleItems(inventoryManager).StackCount == 0)
+        {
+            StopTransfer($"Finished: moved {_movedItems:N0} items across {_completedMoves:N0} moves.");
+        }
+        else
+        {
+            StopTransfer($"Stopped: some eligible items could not be accepted or retainer storage is full. Moved {_movedItems:N0} items across {_completedMoves:N0} moves.");
+        }
+    }
+
+    public void StopTransfer()
+        => StopTransfer("Deposit stopped.");
+
+    public override void OnClose()
+    {
+        StopTransfer();
+        base.OnClose();
+    }
+
+    public override void DrawContent()
+    {
+        if (!_hasInventoryScan)
+            ScanInventory();
+
+        ImGui.TextWrapped("Deposit one stack at a time. Workshoppa waits for each stack to appear in retainer storage, then pauses before the next. A large inventory can take several minutes. Nothing moves until you press Start deposit.");
+        ImGui.Separator();
+
+        bool retainerWindowOpen = IsRetainerTransferWindowOpen();
+        bool retainerSelected = TryGetActiveRetainerId(out _);
+        Snapshot snapshot = GetSnapshot();
+        ImGui.Text("1. Open the retainer screen");
+        if (!retainerWindowOpen)
+            ImGui.TextWrapped("At a Summoning Bell, speak to your retainer and choose “Entrust or withdraw items.” Workshoppa opens this window automatically. If needed, type /ws, then choose Retainer Deposit from Workshoppa’s top menu. Keep the retainer screen open while depositing.");
+        else if (!retainerSelected)
+            ImGui.TextWrapped("The retainer window is open. Waiting for the active retainer to finish loading.");
+        else
+            ImGui.Text("Retainer ready.");
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Text("2. Set restrictions — items to keep");
+        ImGui.TextWrapped("Items you add here are skipped and stay in your inventory. The rule applies to every stack across your four inventory bags.");
+        DrawExclusions();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Text("3. Review and start");
+        ImGui.BulletText($"Will deposit: {snapshot.StackCount:N0} stacks / {snapshot.ItemCount:N0} items");
+        ImGui.BulletText($"Will be kept: {snapshot.ExcludedStackCount:N0} stacks / {snapshot.ExcludedItemCount:N0} items");
+        if (retainerWindowOpen && retainerSelected)
+            ImGui.BulletText($"Retainer space: {snapshot.FreeSlots:N0} empty slots, plus compatible stacks");
+
+        if (_transferActive)
+        {
+            ImGui.TextWrapped(_status);
+            if (ImGui.Button("STOP DEPOSIT", new Vector2(-1, 0)))
+                StopTransfer();
+        }
+        else
+        {
+            ImGui.BeginDisabled(!retainerWindowOpen || !retainerSelected || snapshot.StackCount == 0);
+            if (ImGui.Button("Start deposit", new Vector2(-1, 0)))
+                StartTransfer();
+            ImGui.EndDisabled();
+            if (!retainerWindowOpen)
+                ImGui.TextDisabled("Open the retainer screen in step 1 to enable depositing.");
+            else if (!retainerSelected)
+                ImGui.TextDisabled("Waiting for the active retainer to load.");
+            else if (snapshot.StackCount == 0)
+                ImGui.TextDisabled("Nothing eligible to deposit. Check your keep list in step 2.");
+
+            if (!string.IsNullOrEmpty(_status))
+                ImGui.TextWrapped(_status);
+        }
+    }
+
+    private void DrawExclusions()
+    {
+        if (_configuration.RetainerDepositExcludedItemIds == null)
+            _configuration.RetainerDepositExcludedItemIds = new List<uint>();
+
+        ImGui.Text("Your inventory items");
+        if (ImGui.Button("Scan inventory now"))
+            ScanInventory();
+        ImGui.SameLine();
+        ImGui.TextDisabled(_inventoryScanStatus);
+        ImGui.TextDisabled("Scanning only lists items; it does not move them.");
+        ImGui.TextDisabled("Filter if needed, choose an item, then add it to the keep list.");
+
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+        ImGui.InputTextWithHint("##RetainerExclusionSearch", "Filter inventory items (optional)…", ref _exclusionSearch, 128);
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+        InventoryItemOption selectedItem = _inventoryItems.FirstOrDefault(x => x.Id == _selectedKeepItemId);
+        string preview = selectedItem.Id == _selectedKeepItemId && _selectedKeepItemId != 0
+            ? $"{selectedItem.Name} ({selectedItem.Quantity} in inventory)"
+            : "Choose an item to keep";
+        ImGui.BeginDisabled(!_hasInventoryScan || _inventoryItems.Count == 0);
+        if (ImGui.BeginCombo("Item to keep", preview, ImGuiComboFlags.HeightLarge))
+        {
+            int availableItems = 0;
+            foreach (InventoryItemOption item in _inventoryItems)
+            {
+                if (_configuration.RetainerDepositExcludedItemIds.Contains(item.Id) ||
+                    !item.Name.Contains(_exclusionSearch, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                availableItems++;
+                if (ImGui.Selectable($"{item.Name}  ({item.Quantity} in inventory)##KeepItem{item.Id}",
+                        _selectedKeepItemId == item.Id))
+                {
+                    _selectedKeepItemId = item.Id;
+                    ImGui.CloseCurrentPopup();
+                }
+            }
+
+            if (availableItems == 0)
+            {
+                ImGui.TextDisabled("No available inventory items match this filter.");
+            }
+
+            ImGui.EndCombo();
+        }
+        ImGui.EndDisabled();
+
+        bool selectedCanBeAdded = selectedItem.Id == _selectedKeepItemId && _selectedKeepItemId != 0 &&
+                                  !_configuration.RetainerDepositExcludedItemIds.Contains(_selectedKeepItemId);
+        ImGui.BeginDisabled(!selectedCanBeAdded);
+        if (ImGui.Button("Add selected item to keep list", new Vector2(-1, 0)))
+        {
+            _configuration.RetainerDepositExcludedItemIds.Add(_selectedKeepItemId);
+            _selectedKeepItemId = 0;
+            SaveConfiguration();
+        }
+        ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        ImGui.Text("Items being kept");
+        if (_configuration.RetainerDepositExcludedItemIds.Count == 0)
+        {
+            ImGui.TextDisabled("Empty — all inventory items are eligible to deposit.");
+            return;
+        }
+
+        uint? removeItemId = null;
+        foreach (var excludedItem in _configuration.RetainerDepositExcludedItemIds
+                     .Distinct()
+                     .Select(id => new
+                     {
+                         Id = id,
+                         Name = _items.TryGetValue(id, out var item) ? item.Name : $"Item {id}",
+                     })
+                     .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            uint itemId = excludedItem.Id;
+            InventoryItemOption inventoryItem = _inventoryItems.FirstOrDefault(x => x.Id == itemId);
+            string amount = inventoryItem.Id == itemId
+                ? $"{inventoryItem.Quantity} in inventory"
+                : "not in scanned inventory";
+            ImGui.BulletText($"{excludedItem.Name}  ({amount})");
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"Remove##Excluded{itemId}"))
+                removeItemId = itemId;
+        }
+
+        if (removeItemId is { } id)
+        {
+            _configuration.RetainerDepositExcludedItemIds.RemoveAll(x => x == id);
+            SaveConfiguration();
+        }
+    }
+
+    private void ScanInventory()
+    {
+        InventoryManager* inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+        {
+            _hasInventoryScan = false;
+            _inventoryItems.Clear();
+            _inventoryScanStatus = "Inventory is not ready yet.";
+            return;
+        }
+
+        var quantities = new Dictionary<uint, int>();
+        int loadedContainers = 0;
+        foreach (InventoryType inventoryType in PlayerInventories)
+        {
+            InventoryContainer* container = inventoryManager->GetInventoryContainer(inventoryType);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            loadedContainers++;
+            for (int slotIndex = 0; slotIndex < container->Size; ++slotIndex)
+            {
+                InventoryItem* inventoryItem = container->GetInventorySlot(slotIndex);
+                if (inventoryItem == null || inventoryItem->ItemId == 0 || inventoryItem->Quantity <= 0)
+                    continue;
+
+                quantities[inventoryItem->ItemId] = quantities.GetValueOrDefault(inventoryItem->ItemId) +
+                                                    inventoryItem->Quantity;
+            }
+        }
+
+        if (loadedContainers == 0)
+        {
+            _hasInventoryScan = false;
+            _inventoryItems.Clear();
+            _inventoryScanStatus = "Inventory bags are still loading; scan again shortly.";
+            return;
+        }
+
+        _inventoryItems = quantities
+            .Select(x => new InventoryItemOption(x.Key,
+                _items.TryGetValue(x.Key, out ItemDetails details) ? details.Name : $"Item {x.Key}", x.Value))
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _hasInventoryScan = true;
+        _inventoryScanStatus = $"{_inventoryItems.Count:N0} item types found in {loadedContainers}/4 bags.";
+    }
+
+    private void StartTransfer()
+    {
+        if (!IsRetainerTransferWindowOpen() || !TryGetActiveRetainerId(out ulong retainerId))
+            return;
+
+        _transferRetainerId = retainerId;
+        _transferActive = true;
+        _pendingMove = null;
+        _observedMoveQuantity = 0;
+        _observedMoveMissingAt = DateTime.MinValue;
+        _nextMoveAt = DateTime.MinValue;
+        _failedSources.Clear();
+        _completedMoves = 0;
+        _movedItems = 0;
+        _status = "Starting deposit…";
+    }
+
+    private void StopTransfer(string status)
+    {
+        _transferActive = false;
+        _pendingMove = null;
+        _observedMoveQuantity = 0;
+        _observedMoveMissingAt = DateTime.MinValue;
+        _failedSources.Clear();
+        _status = status;
+    }
+
+    private void SaveConfiguration()
+        => _pluginInterface.SavePluginConfig(_configuration);
+
+    private bool IsRetainerTransferWindowOpen()
+    {
+        // The actual retainer inventory is shown by InventoryRetainer (or its large-layout
+        // variant). RetainerItemTransferList is only the Entrust Duplicates confirmation popup.
+        return IsAddonVisible("InventoryRetainerLarge") || IsAddonVisible("InventoryRetainer");
+    }
+
+    private bool IsRetainerTransferWindowReady()
+        => IsAddonReady("InventoryRetainerLarge") || IsAddonReady("InventoryRetainer");
+
+    private bool IsAddonVisible(string addonName)
+        => _gameGui.TryGetAddonByName<AtkUnitBase>(addonName, out var addon) && addon->IsVisible;
+
+    private bool IsAddonReady(string addonName)
+        => _gameGui.TryGetAddonByName<AtkUnitBase>(addonName, out var addon) && LAddon.IsAddonReady(addon);
+
+    private static bool TryGetActiveRetainerId(out ulong retainerId)
+    {
+        retainerId = 0;
+        RetainerManager* retainerManager = RetainerManager.Instance();
+        if (retainerManager == null || !retainerManager->IsReady)
+            return false;
+
+        RetainerManager.Retainer* activeRetainer = retainerManager->GetActiveRetainer();
+        if (activeRetainer == null || activeRetainer->RetainerId == 0)
+            return false;
+
+        retainerId = activeRetainer->RetainerId;
+        return true;
+    }
+
+    private Snapshot GetSnapshot()
+    {
+        InventoryManager* inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+            return default;
+
+        var (stackCount, itemCount, excludedStackCount, excludedItemCount) = CountEligibleItems(inventoryManager);
+        return new Snapshot(stackCount, itemCount, excludedStackCount, excludedItemCount,
+            CountFreeRetainerSlots(inventoryManager));
+    }
+
+    private (int StackCount, int ItemCount, int ExcludedStackCount, int ExcludedItemCount) CountEligibleItems(
+        InventoryManager* inventoryManager)
+    {
+        int stackCount = 0;
+        int itemCount = 0;
+        int excludedStackCount = 0;
+        int excludedItemCount = 0;
+        foreach (InventoryType inventoryType in PlayerInventories)
+        {
+            InventoryContainer* container = inventoryManager->GetInventoryContainer(inventoryType);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            for (int slotIndex = 0; slotIndex < container->Size; ++slotIndex)
+            {
+                InventoryItem* inventoryItem = container->GetInventorySlot(slotIndex);
                 if (inventoryItem == null || inventoryItem->ItemId == 0 || inventoryItem->Quantity <= 0)
                     continue;
 
