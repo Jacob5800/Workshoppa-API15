@@ -411,11 +411,13 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
     private bool IsRetainerTransferWindowOpen()
     {
-        // The transfer list can be visible while its ULD load state is still settling.
-        // Active-retainer readiness is checked separately before enabling or starting a transfer.
-        return _gameGui.TryGetAddonByName<AtkUnitBase>("RetainerItemTransferList", out var addon) &&
-               addon->IsVisible;
+        // The actual retainer inventory is shown by InventoryRetainer (or its large-layout
+        // variant). RetainerItemTransferList is only the Entrust Duplicates confirmation popup.
+        return IsAddonVisible("InventoryRetainerLarge") || IsAddonVisible("InventoryRetainer");
     }
+
+    private bool IsAddonVisible(string addonName)
+        => _gameGui.TryGetAddonByName<AtkUnitBase>(addonName, out var addon) && addon->IsVisible;
 
     private static bool TryGetActiveRetainerId(out ulong retainerId)
     {
