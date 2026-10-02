@@ -87,8 +87,9 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
             ImGui.BeginDisabled(_plugin.CurrentStage != Stage.Stopped);
             DrawPresetsMenu();
             DrawClipboardMenu();
-            DrawToolsMenu();
             ImGui.EndDisabled();
+            if (ImGui.MenuItem("Retainer Deposit"))
+                _retainerDepositWindow.ToggleFromMenu();
 
             ImGui.EndMenuBar();
         }
@@ -106,6 +107,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
                 ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
                 ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (ImGui.GetFrameHeight() - ImGui.GetTextLineHeight()) / 2);
             }
+            icon?.Dispose();
 
             ImGui.TextUnformatted($"{currentCraft.Name}");
             ImGui.Spacing();
@@ -207,6 +209,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
                 ImGui.Image(icon.Handle, new Vector2(ImGui.GetFrameHeight()));
                 ImGui.SameLine(0, ImGui.GetStyle().ItemInnerSpacing.X);
             }
+            icon?.Dispose();
 
             ImGui.SetNextItemWidth(Math.Max(100 * ImGui.GetIO().FontGlobalScale, 4 * (ImGui.GetFrameHeight() + ImGui.GetStyle().FramePadding.X)));
             int quantity = item.Quantity;
@@ -265,6 +268,7 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
                     ImGui.SetCursorPos(pos);
                     ImGui.Image(icon.Handle, iconSize);
                 }
+                icon?.Dispose();
             }
 
             ImGui.EndCombo();
@@ -495,17 +499,6 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
 
             ImGui.EndMenu();
         }
-    }
-
-    private void DrawToolsMenu()
-    {
-        if (!ImGui.BeginMenu("Tools"))
-            return;
-
-        if (ImGui.MenuItem("Retainer Depositor / Exclusions"))
-            _retainerDepositWindow.ToggleFromMenu();
-
-        ImGui.EndMenu();
     }
 
     /// <summary>

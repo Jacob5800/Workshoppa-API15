@@ -20,6 +20,8 @@ public sealed class IconCache : IDisposable
             iconTex = _textureProvider.GetFromGameIcon(new GameIconLookup(iconId));
             _textureWraps[iconId] = iconTex;
         }
+
+        // TryGetWrap returns a frame-scoped borrowed wrapper; Dalamud explicitly ignores Dispose on it.
         return iconTex.TryGetWrap(out IDalamudTextureWrap? wrap, out _) ? wrap : null;
     }
     public void Dispose()

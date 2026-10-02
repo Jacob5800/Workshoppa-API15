@@ -29,10 +29,13 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
     private readonly Configuration _configuration;
     private readonly IPluginLog _pluginLog;
     private readonly Dictionary<uint, ItemDetails> _items;
-    private readonly List<ItemDetails> _searchableItems;
+    private List<InventoryItemOption> _inventoryItems = new();
 
     private string _exclusionSearch = string.Empty;
-    private string _status = "Open a retainer's item transfer window to get started.";
+    private string _inventoryScanStatus = "Inventory has not been scanned yet.";
+    private string _status = string.Empty;
+    private uint _selectedKeepItemId;
+    private bool _hasInventoryScan;
     private bool _wasRetainerWindowOpen;
     private bool _autoOpened;
     private bool _transferActive;
@@ -46,7 +49,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
     public RetainerDepositWindow(IDalamudPluginInterface pluginInterface, IGameGui gameGui, IDataManager dataManager,
         Configuration configuration, IPluginLog pluginLog)
-        : base("Retainer Depositor###WorkshoppaRetainerDepositWindow")
+        : base("Retainer Deposit###WorkshoppaRetainerDepositWindow")
     {
         _pluginInterface = pluginInterface;
         _gameGui = gameGui;
@@ -58,18 +61,14 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
             .Where(x => x.RowId > 0)
             .Select(x => new ItemDetails(x.RowId, x.Name.ToString(), x.StackSize))
             .ToDictionary(x => x.Id);
-        _searchableItems = _items.Values
-            .Where(x => !string.IsNullOrWhiteSpace(x.Name))
-            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
 
         Position = new Vector2(180, 140);
         PositionCondition = ImGuiCond.FirstUseEver;
-        Size = new Vector2(470, 500);
+        Size = new Vector2(520, 620);
         SizeCondition = ImGuiCond.FirstUseEver;
         SizeConstraints = new WindowSizeConstraints
         {
-            MinimumSize = new Vector2(400, 350),
+            MinimumSize = new Vector2(420, 400),
             MaximumSize = new Vector2(720, 850),
         };
     }
@@ -185,44 +184,59 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
     public override void DrawContent()
     {
-        ImGui.TextWrapped("Deposit eligible items from your four inventory bags to the active retainer. Transfers run one at a time and stop if the retainer window closes or the active retainer changes.");
+        if (!_hasInventoryScan)
+            ScanInventory();
+
+        ImGui.TextWrapped("Move items from your inventory into the active retainer. Nothing moves until you press Start deposit.");
         ImGui.Separator();
 
         bool retainerWindowOpen = IsRetainerTransferWindowOpen();
         bool retainerSelected = TryGetActiveRetainerId(out _);
+        Snapshot snapshot = GetSnapshot();
+        ImGui.Text("1. Open the retainer screen");
         if (!retainerWindowOpen)
-            ImGui.TextDisabled("Open the retainer's item transfer window to enable depositing.");
+            ImGui.TextWrapped("At a Summoning Bell, speak to your retainer and choose “Entrust or withdraw items.” Workshoppa opens this window automatically. If needed, type /ws, then choose Retainer Deposit from Workshoppa’s top menu. Keep the retainer screen open while depositing.");
         else if (!retainerSelected)
-            ImGui.TextDisabled("Waiting for the active retainer to finish loading.");
+            ImGui.TextWrapped("The retainer window is open. Waiting for the active retainer to finish loading.");
         else
-        {
-            var snapshot = GetSnapshot();
-            ImGui.Text($"Ready to deposit: {snapshot.StackCount:N0} stacks / {snapshot.ItemCount:N0} items");
-            ImGui.Text($"Excluded: {snapshot.ExcludedStackCount:N0} stacks / {snapshot.ExcludedItemCount:N0} items");
-            ImGui.Text($"Retainer storage: {snapshot.FreeSlots:N0} empty slots, plus compatible stacks");
-        }
+            ImGui.Text("Retainer ready.");
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Text("2. Set restrictions — items to keep");
+        ImGui.TextWrapped("Items you add here are skipped and stay in your inventory. The rule applies to every stack across your four inventory bags.");
+        DrawExclusions();
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Text("3. Review and start");
+        ImGui.BulletText($"Will deposit: {snapshot.StackCount:N0} stacks / {snapshot.ItemCount:N0} items");
+        ImGui.BulletText($"Will be kept: {snapshot.ExcludedStackCount:N0} stacks / {snapshot.ExcludedItemCount:N0} items");
+        if (retainerWindowOpen && retainerSelected)
+            ImGui.BulletText($"Retainer space: {snapshot.FreeSlots:N0} empty slots, plus compatible stacks");
 
         if (_transferActive)
         {
             ImGui.TextWrapped(_status);
-            if (ImGui.Button("Stop depositing"))
+            if (ImGui.Button("STOP DEPOSIT", new Vector2(-1, 0)))
                 StopTransfer();
         }
         else
         {
-            ImGui.BeginDisabled(!retainerWindowOpen || !retainerSelected || GetSnapshot().StackCount == 0);
-            if (ImGui.Button("Deposit eligible items"))
+            ImGui.BeginDisabled(!retainerWindowOpen || !retainerSelected || snapshot.StackCount == 0);
+            if (ImGui.Button("Start deposit", new Vector2(-1, 0)))
                 StartTransfer();
             ImGui.EndDisabled();
-            ImGui.SameLine();
-            ImGui.TextDisabled("Review the counts above before starting.");
-        }
+            if (!retainerWindowOpen)
+                ImGui.TextDisabled("Open the retainer screen in step 1 to enable depositing.");
+            else if (!retainerSelected)
+                ImGui.TextDisabled("Waiting for the active retainer to load.");
+            else if (snapshot.StackCount == 0)
+                ImGui.TextDisabled("Nothing eligible to deposit. Check your keep list in step 2.");
 
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Text("Exclusions");
-        ImGui.TextDisabled("Excluded item types will be skipped in every bag. This list is saved with Workshoppa's settings.");
-        DrawExclusions();
+            if (!string.IsNullOrEmpty(_status))
+                ImGui.TextWrapped(_status);
+        }
     }
 
     private void DrawExclusions()
@@ -230,47 +244,84 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         if (_configuration.RetainerDepositExcludedItemIds == null)
             _configuration.RetainerDepositExcludedItemIds = new List<uint>();
 
-        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
-        if (ImGui.BeginCombo("##RetainerExclusionItem", "Add an item to skip…"))
-        {
-            ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
-            ImGui.InputTextWithHint("##RetainerExclusionSearch", "Search items…", ref _exclusionSearch, 128);
+        ImGui.Text("Your inventory items");
+        if (ImGui.Button("Scan inventory now"))
+            ScanInventory();
+        ImGui.SameLine();
+        ImGui.TextDisabled(_inventoryScanStatus);
+        ImGui.TextDisabled("Scanning only lists items; it does not move them.");
+        ImGui.TextDisabled("Filter if needed, choose an item, then add it to the keep list.");
 
-            if (_exclusionSearch.Length >= 2)
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+        ImGui.InputTextWithHint("##RetainerExclusionSearch", "Filter inventory items (optional)…", ref _exclusionSearch, 128);
+        ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
+        InventoryItemOption selectedItem = _inventoryItems.FirstOrDefault(x => x.Id == _selectedKeepItemId);
+        string preview = selectedItem.Id == _selectedKeepItemId && _selectedKeepItemId != 0
+            ? $"{selectedItem.Name} ({selectedItem.Quantity} in inventory)"
+            : "Choose an item to keep";
+        ImGui.BeginDisabled(!_hasInventoryScan || _inventoryItems.Count == 0);
+        if (ImGui.BeginCombo("Item to keep", preview, ImGuiComboFlags.HeightLarge))
+        {
+            int availableItems = 0;
+            foreach (InventoryItemOption item in _inventoryItems)
             {
-                foreach (var item in _searchableItems
-                             .Where(x => x.Name.Contains(_exclusionSearch, StringComparison.OrdinalIgnoreCase))
-                             .Take(40))
+                if (_configuration.RetainerDepositExcludedItemIds.Contains(item.Id) ||
+                    !item.Name.Contains(_exclusionSearch, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                availableItems++;
+                if (ImGui.Selectable($"{item.Name}  ({item.Quantity} in inventory)##KeepItem{item.Id}",
+                        _selectedKeepItemId == item.Id))
                 {
-                    bool alreadyExcluded = _configuration.RetainerDepositExcludedItemIds.Contains(item.Id);
-                    ImGui.BeginDisabled(alreadyExcluded);
-                    if (ImGui.Selectable($"{item.Name}##ExcludeItem{item.Id}", false))
-                    {
-                        _configuration.RetainerDepositExcludedItemIds.Add(item.Id);
-                        SaveConfiguration();
-                    }
-                    ImGui.EndDisabled();
+                    _selectedKeepItemId = item.Id;
+                    ImGui.CloseCurrentPopup();
                 }
             }
-            else
+
+            if (availableItems == 0)
             {
-                ImGui.TextDisabled("Type at least two characters to search.");
+                ImGui.TextDisabled("No available inventory items match this filter.");
             }
 
             ImGui.EndCombo();
         }
+        ImGui.EndDisabled();
 
+        bool selectedCanBeAdded = selectedItem.Id == _selectedKeepItemId && _selectedKeepItemId != 0 &&
+                                  !_configuration.RetainerDepositExcludedItemIds.Contains(_selectedKeepItemId);
+        ImGui.BeginDisabled(!selectedCanBeAdded);
+        if (ImGui.Button("Add selected item to keep list", new Vector2(-1, 0)))
+        {
+            _configuration.RetainerDepositExcludedItemIds.Add(_selectedKeepItemId);
+            _selectedKeepItemId = 0;
+            SaveConfiguration();
+        }
+        ImGui.EndDisabled();
+
+        ImGui.Spacing();
+        ImGui.Text("Items being kept");
         if (_configuration.RetainerDepositExcludedItemIds.Count == 0)
         {
-            ImGui.TextDisabled("No exclusions set.");
+            ImGui.TextDisabled("Empty — all inventory items are eligible to deposit.");
             return;
         }
 
         uint? removeItemId = null;
-        foreach (uint itemId in _configuration.RetainerDepositExcludedItemIds.Distinct().Order())
+        foreach (var excludedItem in _configuration.RetainerDepositExcludedItemIds
+                     .Distinct()
+                     .Select(id => new
+                     {
+                         Id = id,
+                         Name = _items.TryGetValue(id, out var item) ? item.Name : $"Item {id}",
+                     })
+                     .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase))
         {
-            string itemName = _items.TryGetValue(itemId, out var item) ? item.Name : $"Item {itemId}";
-            ImGui.BulletText(itemName);
+            uint itemId = excludedItem.Id;
+            InventoryItemOption inventoryItem = _inventoryItems.FirstOrDefault(x => x.Id == itemId);
+            string amount = inventoryItem.Id == itemId
+                ? $"{inventoryItem.Quantity} in inventory"
+                : "not in scanned inventory";
+            ImGui.BulletText($"{excludedItem.Name}  ({amount})");
             ImGui.SameLine();
             if (ImGui.SmallButton($"Remove##Excluded{itemId}"))
                 removeItemId = itemId;
@@ -281,6 +332,54 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
             _configuration.RetainerDepositExcludedItemIds.RemoveAll(x => x == id);
             SaveConfiguration();
         }
+    }
+
+    private void ScanInventory()
+    {
+        InventoryManager* inventoryManager = InventoryManager.Instance();
+        if (inventoryManager == null)
+        {
+            _hasInventoryScan = false;
+            _inventoryItems.Clear();
+            _inventoryScanStatus = "Inventory is not ready yet.";
+            return;
+        }
+
+        var quantities = new Dictionary<uint, int>();
+        int loadedContainers = 0;
+        foreach (InventoryType inventoryType in PlayerInventories)
+        {
+            InventoryContainer* container = inventoryManager->GetInventoryContainer(inventoryType);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            loadedContainers++;
+            for (int slotIndex = 0; slotIndex < container->Size; ++slotIndex)
+            {
+                InventoryItem* inventoryItem = container->GetInventorySlot(slotIndex);
+                if (inventoryItem == null || inventoryItem->ItemId == 0 || inventoryItem->Quantity <= 0)
+                    continue;
+
+                quantities[inventoryItem->ItemId] = quantities.GetValueOrDefault(inventoryItem->ItemId) +
+                                                    inventoryItem->Quantity;
+            }
+        }
+
+        if (loadedContainers == 0)
+        {
+            _hasInventoryScan = false;
+            _inventoryItems.Clear();
+            _inventoryScanStatus = "Inventory bags are still loading; scan again shortly.";
+            return;
+        }
+
+        _inventoryItems = quantities
+            .Select(x => new InventoryItemOption(x.Key,
+                _items.TryGetValue(x.Key, out ItemDetails details) ? details.Name : $"Item {x.Key}", x.Value))
+            .OrderBy(x => x.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        _hasInventoryScan = true;
+        _inventoryScanStatus = $"{_inventoryItems.Count:N0} item types found in {loadedContainers}/4 bags.";
     }
 
     private void StartTransfer()
@@ -519,6 +618,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
     }
 
     private readonly record struct ItemDetails(uint Id, string Name, uint StackSize);
+    private readonly record struct InventoryItemOption(uint Id, string Name, int Quantity);
     private readonly record struct MoveSource(InventoryType SourceType, ushort SourceSlot);
     private readonly record struct MovePair(InventoryType SourceType, ushort SourceSlot,
         InventoryType DestinationType, ushort DestinationSlot);

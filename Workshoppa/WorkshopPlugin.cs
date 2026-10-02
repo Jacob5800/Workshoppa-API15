@@ -56,6 +56,8 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
         ICommandManager commandManager, IPluginLog pluginLog, IAddonLifecycle addonLifecycle, IChatGui chatGui,
         ITextureProvider textureProvider)
     {
+        ArgumentNullException.ThrowIfNull(dataManager);
+
         _pluginInterface = pluginInterface;
         _gameGui = gameGui;
         _framework = framework;
