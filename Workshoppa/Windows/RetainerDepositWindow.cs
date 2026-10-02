@@ -7,6 +7,8 @@ using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Client.Game;
+using FFXIVClientStructs.FFXIV.Client.UI;
+using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 using LLib.GameUI;
 using LLib.ImGui;
@@ -16,7 +18,11 @@ namespace Workshoppa.Windows;
 
 internal sealed unsafe class RetainerDepositWindow : LWindow
 {
-    private static readonly TimeSpan MoveCooldown = TimeSpan.FromMilliseconds(500);
+    // AgentInventoryContext callback parameter documented for AgentRetainer's entrust action.
+    private const ulong EntrustToRetainerCallback = 1;
+    private static readonly TimeSpan MoveCooldown = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan MoveConfirmationStability = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MoveTimeout = TimeSpan.FromSeconds(10);
     private static readonly InventoryType[] PlayerInventories =
     [
         InventoryType.Inventory1,
@@ -43,8 +49,10 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
     private ulong _transferRetainerId;
     private PendingMove? _pendingMove;
     private DateTime _pendingSince;
+    private DateTime _observedMoveAt;
+    private DateTime _observedMoveMissingAt;
+    private int _observedMoveQuantity;
     private DateTime _nextMoveAt;
-    private readonly HashSet<MovePair> _failedMoves = new();
     private readonly HashSet<MoveSource> _failedSources = new();
     private int _completedMoves;
     private int _movedItems;
@@ -129,26 +137,67 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
         if (_pendingMove is { } pending)
         {
-            if (WasMoveApplied(inventoryManager, pending, out int movedQuantity))
+            DateTime now = DateTime.UtcNow;
+            if (TryGetAppliedMove(inventoryManager, pending, out int movedQuantity))
             {
-                _completedMoves++;
-                _movedItems += movedQuantity;
-                _pendingMove = null;
-                _nextMoveAt = DateTime.UtcNow + MoveCooldown;
-                _status = $"Deposited {_movedItems:N0} items across {_completedMoves:N0} moves…";
-            }
-            else if (DateTime.UtcNow - _pendingSince > TimeSpan.FromSeconds(4))
-            {
-                _failedMoves.Add(new MovePair(pending.SourceType, pending.SourceSlot,
-                    pending.DestinationType, pending.DestinationSlot));
-                if (pending.DestinationItemId == 0)
-                    _failedSources.Add(new MoveSource(pending.SourceType, pending.SourceSlot));
-                _pluginLog.Warning(
-                    $"Retainer deposit did not complete for item {pending.ItemId} from {pending.SourceType}[{pending.SourceSlot}] to {pending.DestinationType}[{pending.DestinationSlot}].");
-                _pendingMove = null;
-                _nextMoveAt = DateTime.UtcNow + MoveCooldown;
+                _observedMoveMissingAt = DateTime.MinValue;
+                if (_observedMoveQuantity != movedQuantity)
+                {
+                    _observedMoveQuantity = movedQuantity;
+                    _observedMoveAt = now;
+                }
+
+                if (now - _observedMoveAt >= MoveConfirmationStability)
+                {
+                    _completedMoves++;
+                    _movedItems += movedQuantity;
+                    string itemName = _items.TryGetValue(pending.ItemId, out var itemDetails)
+                        ? itemDetails.Name
+                        : $"item {pending.ItemId}";
+                    _pluginLog.Information(
+                        $"Retainer deposit confirmed for {movedQuantity:N0} x {itemName} from {pending.SourceType}[{pending.SourceSlot}].");
+                    _pendingMove = null;
+                    _observedMoveQuantity = 0;
+                    _observedMoveMissingAt = DateTime.MinValue;
+                    _nextMoveAt = now + MoveCooldown;
+                    _status = $"Deposited {_movedItems:N0} items across {_completedMoves:N0} moves…";
+                }
             }
             else
+            {
+                if (_observedMoveQuantity > 0)
+                {
+                    if (_observedMoveMissingAt == DateTime.MinValue)
+                        _observedMoveMissingAt = now;
+
+                    if (now - _observedMoveMissingAt >= MoveCooldown)
+                    {
+                        string itemName = _items.TryGetValue(pending.ItemId, out var itemDetails)
+                            ? itemDetails.Name
+                            : $"item {pending.ItemId}";
+                        _pluginLog.Warning(
+                            $"Retainer transfer for {itemName} reverted before its inventory change was confirmed.");
+                        StopTransfer($"Stopped because {itemName} reverted before the transfer could be confirmed.");
+                        return;
+                    }
+                }
+            }
+
+            if (_pendingMove is not null && now - _pendingSince > MoveTimeout)
+            {
+                _failedSources.Add(new MoveSource(pending.SourceType, pending.SourceSlot, pending.ItemId,
+                    pending.Flags));
+                string itemName = _items.TryGetValue(pending.ItemId, out var itemDetails)
+                    ? itemDetails.Name
+                    : $"item {pending.ItemId}";
+                _pluginLog.Warning(
+                    $"Retainer deposit was not confirmed for {itemName} from {pending.SourceType}[{pending.SourceSlot}].");
+                _pendingMove = null;
+                _observedMoveQuantity = 0;
+                _observedMoveMissingAt = DateTime.MinValue;
+                _nextMoveAt = now + MoveCooldown;
+            }
+            else if (_pendingMove is not null)
             {
                 return;
             }
@@ -157,16 +206,44 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         if (DateTime.UtcNow < _nextMoveAt)
             return;
 
+        if (!IsRetainerTransferWindowReady())
+        {
+            _status = "Waiting for the retainer inventory screen to finish loading…";
+            return;
+        }
+
         if (TryFindNextMove(inventoryManager, out PendingMove nextMove))
         {
+            AgentModule* agentModule = AgentModule.Instance();
+            AgentRetainer* retainerAgent = agentModule == null
+                ? null
+                : (AgentRetainer*)agentModule->GetAgentByInternalId(AgentId.Retainer);
+            if (retainerAgent == null || !retainerAgent->IsAgentActive())
+            {
+                StopTransfer("Stopped because the game's retainer item-action agent is unavailable.");
+                return;
+            }
+
             _pendingMove = nextMove;
             _pendingSince = DateTime.UtcNow;
-            inventoryManager->MoveItemSlot(nextMove.SourceType, nextMove.SourceSlot,
-                nextMove.DestinationType, nextMove.DestinationSlot);
+            _observedMoveQuantity = 0;
+            _observedMoveMissingAt = DateTime.MinValue;
+            try
+            {
+                retainerAgent->HandleCallback(nextMove.SourceSlot, nextMove.SourceType, default,
+                    EntrustToRetainerCallback);
+            }
+            catch (Exception ex)
+            {
+                _pluginLog.Error(ex, "Failed to invoke the game's retainer entrust action.");
+                StopTransfer("Stopped because the game's retainer entrust action could not be invoked.");
+                return;
+            }
+
             string itemName = _items.TryGetValue(nextMove.ItemId, out var itemDetails)
                 ? itemDetails.Name
                 : $"item {nextMove.ItemId}";
-            _status = $"Depositing {itemName}…";
+            _status = $"Requesting deposit for {itemName}…";
             return;
         }
 
@@ -194,7 +271,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         if (!_hasInventoryScan)
             ScanInventory();
 
-        ImGui.TextWrapped("Move inventory stacks into the active retainer one at a time, with a short pause between moves. Nothing moves until you press Start deposit.");
+        ImGui.TextWrapped("Deposit one stack at a time. Workshoppa waits for each stack to appear in retainer storage, then pauses before the next. A large inventory can take several minutes. Nothing moves until you press Start deposit.");
         ImGui.Separator();
 
         bool retainerWindowOpen = IsRetainerTransferWindowOpen();
@@ -397,8 +474,9 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         _transferRetainerId = retainerId;
         _transferActive = true;
         _pendingMove = null;
+        _observedMoveQuantity = 0;
+        _observedMoveMissingAt = DateTime.MinValue;
         _nextMoveAt = DateTime.MinValue;
-        _failedMoves.Clear();
         _failedSources.Clear();
         _completedMoves = 0;
         _movedItems = 0;
@@ -409,7 +487,8 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
     {
         _transferActive = false;
         _pendingMove = null;
-        _failedMoves.Clear();
+        _observedMoveQuantity = 0;
+        _observedMoveMissingAt = DateTime.MinValue;
         _failedSources.Clear();
         _status = status;
     }
@@ -424,8 +503,14 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         return IsAddonVisible("InventoryRetainerLarge") || IsAddonVisible("InventoryRetainer");
     }
 
+    private bool IsRetainerTransferWindowReady()
+        => IsAddonReady("InventoryRetainerLarge") || IsAddonReady("InventoryRetainer");
+
     private bool IsAddonVisible(string addonName)
         => _gameGui.TryGetAddonByName<AtkUnitBase>(addonName, out var addon) && addon->IsVisible;
+
+    private bool IsAddonReady(string addonName)
+        => _gameGui.TryGetAddonByName<AtkUnitBase>(addonName, out var addon) && LAddon.IsAddonReady(addon);
 
     private static bool TryGetActiveRetainerId(out ulong retainerId)
     {
@@ -522,7 +607,8 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 InventoryItem* source = sourceContainer->GetInventorySlot(sourceIndex);
                 if (source == null || source->ItemId == 0 || source->Quantity <= 0 ||
                     _configuration.RetainerDepositExcludedItemIds.Contains(source->ItemId) ||
-                    _failedSources.Contains(new MoveSource(sourceType, checked((ushort)sourceIndex))))
+                    _failedSources.Contains(new MoveSource(sourceType, checked((ushort)sourceIndex),
+                        source->ItemId, source->Flags)))
                     continue;
 
                 if (!TryFindDestination(inventoryManager, sourceType, source, sourceIndex,
@@ -564,11 +650,6 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 if (destinationType == sourceType && destinationIndex == sourceIndex)
                     continue;
 
-                var pair = new MovePair(sourceType, checked((ushort)sourceIndex), destinationType,
-                    checked((ushort)destinationIndex));
-                if (_failedMoves.Contains(pair))
-                    continue;
-
                 InventoryItem* destination = destinationContainer->GetInventorySlot(destinationIndex);
                 if (destination == null)
                     continue;
@@ -577,7 +658,8 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 {
                     if (destination->ItemId != source->ItemId || destination->Flags != source->Flags ||
                         destination->SpiritbondOrCollectability != source->SpiritbondOrCollectability ||
-                        destination->Quantity >= maxStackSize)
+                        destination->Quantity >= maxStackSize ||
+                        maxStackSize - destination->Quantity < source->Quantity)
                         continue;
                 }
                 else if (destination->ItemId != 0)
@@ -586,8 +668,8 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 }
 
                 pendingMove = new PendingMove(sourceType, checked((ushort)sourceIndex), source->ItemId,
-                    source->Quantity, destinationType, checked((ushort)destinationIndex), destination->ItemId,
-                    destination->Quantity);
+                    source->Flags, source->Quantity,
+                    CountRetainerItems(inventoryManager, source->ItemId, source->Flags));
                 return true;
             }
         }
@@ -596,47 +678,67 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         return false;
     }
 
-    private static bool WasMoveApplied(InventoryManager* inventoryManager, PendingMove pendingMove,
+    private static bool TryGetAppliedMove(InventoryManager* inventoryManager, PendingMove pendingMove,
         out int movedQuantity)
     {
         InventoryContainer* sourceContainer = inventoryManager->GetInventoryContainer(pendingMove.SourceType);
-        InventoryContainer* destinationContainer = inventoryManager->GetInventoryContainer(pendingMove.DestinationType);
-        if (sourceContainer == null || destinationContainer == null || !sourceContainer->IsLoaded ||
-            !destinationContainer->IsLoaded)
+        if (sourceContainer == null || !sourceContainer->IsLoaded)
         {
             movedQuantity = 0;
             return false;
         }
 
         InventoryItem* source = sourceContainer->GetInventorySlot(pendingMove.SourceSlot);
-        InventoryItem* destination = destinationContainer->GetInventorySlot(pendingMove.DestinationSlot);
-        if (source == null || destination == null)
+        if (source == null)
         {
             movedQuantity = 0;
             return false;
         }
 
-        int remaining = source->ItemId == pendingMove.ItemId ? source->Quantity : 0;
-        bool destinationChanged = destination->ItemId == pendingMove.ItemId &&
-                                 destination->Quantity > pendingMove.DestinationQuantity;
-        if (remaining >= pendingMove.SourceQuantity || !destinationChanged)
+        int remaining = source->ItemId == pendingMove.ItemId && source->Flags == pendingMove.Flags
+            ? source->Quantity
+            : 0;
+        int sourceDecrease = pendingMove.SourceQuantity - remaining;
+        int retainerIncrease = CountRetainerItems(inventoryManager, pendingMove.ItemId, pendingMove.Flags) -
+                               pendingMove.RetainerItemCount;
+        if (sourceDecrease <= 0 || retainerIncrease <= 0 || sourceDecrease != retainerIncrease)
         {
             movedQuantity = 0;
             return false;
         }
 
-        movedQuantity = pendingMove.SourceQuantity - remaining;
+        movedQuantity = sourceDecrease;
         return movedQuantity > 0;
+    }
+
+    private static int CountRetainerItems(InventoryManager* inventoryManager, uint itemId,
+        InventoryItem.ItemFlags flags)
+    {
+        int itemCount = 0;
+        for (int page = 0; page < 7; ++page)
+        {
+            InventoryType inventoryType = (InventoryType)((uint)InventoryType.RetainerPage1 + (uint)page);
+            InventoryContainer* container = inventoryManager->GetInventoryContainer(inventoryType);
+            if (container == null || !container->IsLoaded)
+                continue;
+
+            for (int slotIndex = 0; slotIndex < container->Size; ++slotIndex)
+            {
+                InventoryItem* item = container->GetInventorySlot(slotIndex);
+                if (item != null && item->ItemId == itemId && item->Flags == flags)
+                    itemCount += item->Quantity;
+            }
+        }
+
+        return itemCount;
     }
 
     private readonly record struct ItemDetails(uint Id, string Name, uint StackSize);
     private readonly record struct InventoryItemOption(uint Id, string Name, int Quantity);
-    private readonly record struct MoveSource(InventoryType SourceType, ushort SourceSlot);
-    private readonly record struct MovePair(InventoryType SourceType, ushort SourceSlot,
-        InventoryType DestinationType, ushort DestinationSlot);
+    private readonly record struct MoveSource(InventoryType SourceType, ushort SourceSlot, uint ItemId,
+        InventoryItem.ItemFlags Flags);
     private readonly record struct PendingMove(InventoryType SourceType, ushort SourceSlot, uint ItemId,
-        int SourceQuantity, InventoryType DestinationType, ushort DestinationSlot, uint DestinationItemId,
-        int DestinationQuantity);
+        InventoryItem.ItemFlags Flags, int SourceQuantity, int RetainerItemCount);
     private readonly record struct Snapshot(int StackCount, int ItemCount, int ExcludedStackCount,
         int ExcludedItemCount, int FreeSlots);
 }
