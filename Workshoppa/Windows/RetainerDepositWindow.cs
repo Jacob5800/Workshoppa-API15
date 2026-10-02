@@ -16,6 +16,7 @@ namespace Workshoppa.Windows;
 
 internal sealed unsafe class RetainerDepositWindow : LWindow
 {
+    private static readonly TimeSpan MoveCooldown = TimeSpan.FromMilliseconds(500);
     private static readonly InventoryType[] PlayerInventories =
     [
         InventoryType.Inventory1,
@@ -42,6 +43,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
     private ulong _transferRetainerId;
     private PendingMove? _pendingMove;
     private DateTime _pendingSince;
+    private DateTime _nextMoveAt;
     private readonly HashSet<MovePair> _failedMoves = new();
     private readonly HashSet<MoveSource> _failedSources = new();
     private int _completedMoves;
@@ -132,6 +134,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 _completedMoves++;
                 _movedItems += movedQuantity;
                 _pendingMove = null;
+                _nextMoveAt = DateTime.UtcNow + MoveCooldown;
                 _status = $"Deposited {_movedItems:N0} items across {_completedMoves:N0} moves…";
             }
             else if (DateTime.UtcNow - _pendingSince > TimeSpan.FromSeconds(4))
@@ -143,12 +146,16 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 _pluginLog.Warning(
                     $"Retainer deposit did not complete for item {pending.ItemId} from {pending.SourceType}[{pending.SourceSlot}] to {pending.DestinationType}[{pending.DestinationSlot}].");
                 _pendingMove = null;
+                _nextMoveAt = DateTime.UtcNow + MoveCooldown;
             }
             else
             {
                 return;
             }
         }
+
+        if (DateTime.UtcNow < _nextMoveAt)
+            return;
 
         if (TryFindNextMove(inventoryManager, out PendingMove nextMove))
         {
@@ -187,7 +194,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         if (!_hasInventoryScan)
             ScanInventory();
 
-        ImGui.TextWrapped("Move items from your inventory into the active retainer. Nothing moves until you press Start deposit.");
+        ImGui.TextWrapped("Move inventory stacks into the active retainer one at a time, with a short pause between moves. Nothing moves until you press Start deposit.");
         ImGui.Separator();
 
         bool retainerWindowOpen = IsRetainerTransferWindowOpen();
@@ -390,6 +397,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
         _transferRetainerId = retainerId;
         _transferActive = true;
         _pendingMove = null;
+        _nextMoveAt = DateTime.MinValue;
         _failedMoves.Clear();
         _failedSources.Clear();
         _completedMoves = 0;
