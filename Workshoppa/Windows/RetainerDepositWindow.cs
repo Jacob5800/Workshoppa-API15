@@ -411,8 +411,10 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 
     private bool IsRetainerTransferWindowOpen()
     {
+        // The transfer list can be visible while its ULD load state is still settling.
+        // Active-retainer readiness is checked separately before enabling or starting a transfer.
         return _gameGui.TryGetAddonByName<AtkUnitBase>("RetainerItemTransferList", out var addon) &&
-               LAddon.IsAddonReady(addon);
+               addon->IsVisible;
     }
 
     private static bool TryGetActiveRetainerId(out ulong retainerId)
