@@ -20,8 +20,9 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
 {
     // AgentInventoryContext callback parameter documented for AgentRetainer's entrust action.
     private const ulong EntrustToRetainerCallback = 1;
-    private static readonly TimeSpan MoveCooldown = TimeSpan.FromMilliseconds(1500);
-    private static readonly TimeSpan MoveConfirmationStability = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan MoveConfirmationStability = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan MoveRollbackGrace = TimeSpan.FromSeconds(1);
+    private static readonly TimeSpan FailedMoveRetryDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan MoveTimeout = TimeSpan.FromSeconds(10);
     private static readonly InventoryType[] PlayerInventories =
     [
@@ -159,7 +160,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                     _pendingMove = null;
                     _observedMoveQuantity = 0;
                     _observedMoveMissingAt = DateTime.MinValue;
-                    _nextMoveAt = now + MoveCooldown;
+                    _nextMoveAt = now;
                     _status = $"Deposited {_movedItems:N0} items across {_completedMoves:N0} moves…";
                 }
             }
@@ -170,7 +171,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                     if (_observedMoveMissingAt == DateTime.MinValue)
                         _observedMoveMissingAt = now;
 
-                    if (now - _observedMoveMissingAt >= MoveCooldown)
+                    if (now - _observedMoveMissingAt >= MoveRollbackGrace)
                     {
                         string itemName = _items.TryGetValue(pending.ItemId, out var itemDetails)
                             ? itemDetails.Name
@@ -195,7 +196,7 @@ internal sealed unsafe class RetainerDepositWindow : LWindow
                 _pendingMove = null;
                 _observedMoveQuantity = 0;
                 _observedMoveMissingAt = DateTime.MinValue;
-                _nextMoveAt = now + MoveCooldown;
+                _nextMoveAt = now + FailedMoveRetryDelay;
             }
             else if (_pendingMove is not null)
             {

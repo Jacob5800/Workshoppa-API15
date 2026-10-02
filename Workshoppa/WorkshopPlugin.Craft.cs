@@ -1,13 +1,7 @@
 ﻿using System;
 using System.Linq;
-using Dalamud.Game.Addon.Lifecycle;
-using Dalamud.Game.Addon.Lifecycle.AddonArgTypes;
-using Dalamud.Game.ClientState.Conditions;
 using FFXIVClientStructs.FFXIV.Client.Game;
-using FFXIVClientStructs.FFXIV.Client.UI.Agent;
-using FFXIVClientStructs.FFXIV.Client.UI;
 using FFXIVClientStructs.FFXIV.Component.GUI;
-using LLib.GameUI;
 using Workshoppa.GameData;
 using AtkValueType = FFXIVClientStructs.FFXIV.Component.GUI.AtkValueType;
 
@@ -16,83 +10,6 @@ namespace Workshoppa;
 partial class WorkshopPlugin
 {
     private uint? _contributingItemId;
-    private bool _workshopTransitionCutsceneSkipPending;
-    private bool _workshopTransitionCutsceneSkipRequested;
-    private DateTime _workshopTransitionCutsceneSkipExpiresAt;
-    private DateTime _nextWorkshopTransitionCutsceneSkipAttempt;
-
-    private void ArmWorkshopTransitionCutsceneSkip()
-    {
-        _workshopTransitionCutsceneSkipPending = true;
-        _workshopTransitionCutsceneSkipRequested = false;
-        _workshopTransitionCutsceneSkipExpiresAt = DateTime.Now.AddSeconds(15);
-        _nextWorkshopTransitionCutsceneSkipAttempt = DateTime.MinValue;
-    }
-
-    private void ClearWorkshopTransitionCutsceneSkip()
-    {
-        _workshopTransitionCutsceneSkipPending = false;
-        _workshopTransitionCutsceneSkipRequested = false;
-        _workshopTransitionCutsceneSkipExpiresAt = DateTime.MinValue;
-        _nextWorkshopTransitionCutsceneSkipAttempt = DateTime.MinValue;
-    }
-
-    private unsafe void TrySkipWorkshopTransitionCutscene()
-    {
-        if (!_workshopTransitionCutsceneSkipPending)
-            return;
-
-        var now = DateTime.Now;
-        if (now >= _workshopTransitionCutsceneSkipExpiresAt)
-        {
-            _pluginLog.Warning("Workshop transition cutscene skip request expired before the skip prompt appeared");
-            ClearWorkshopTransitionCutsceneSkip();
-            return;
-        }
-
-        // WatchingCutscene (58) is not the flag used by all of the game's current cutscene paths.
-        // The UI builder considers OccupiedInCutSceneEvent and WatchingCutscene78 the active
-        // cutscene conditions, so accept those as well for the workshop transition scenes.
-        bool isWatchingCutscene = _condition[ConditionFlag.WatchingCutscene] ||
-                                  _condition[ConditionFlag.WatchingCutscene78] ||
-                                  _condition[ConditionFlag.OccupiedInCutSceneEvent];
-        if (!isWatchingCutscene ||
-            _workshopTransitionCutsceneSkipRequested ||
-            now < _nextWorkshopTransitionCutsceneSkipAttempt)
-            return;
-
-        _nextWorkshopTransitionCutsceneSkipAttempt = now.AddMilliseconds(250);
-
-        AgentModule* agentModule = AgentModule.Instance();
-        if (agentModule == null)
-            return;
-
-        AgentCutscene* cutsceneAgent = (AgentCutscene*)agentModule->GetAgentByInternalId(AgentId.Cutscene);
-        if (cutsceneAgent == null || cutsceneAgent->SkipCallback == null || cutsceneAgent->SkipDialogAddonId != 0)
-            return;
-
-        if (cutsceneAgent->OpenSkipDialog(cutsceneAgent->SkipCallback))
-        {
-            _pluginLog.Information("Opening skip prompt for workshop transition cutscene");
-            _workshopTransitionCutsceneSkipRequested = true;
-        }
-    }
-
-    private unsafe bool IsWorkshopTransitionCutsceneSkipDialog(AtkUnitBase* addon)
-    {
-        if (!_workshopTransitionCutsceneSkipPending || addon == null)
-            return false;
-
-        AgentModule* agentModule = AgentModule.Instance();
-        if (agentModule == null)
-            return false;
-
-        AgentCutscene* cutsceneAgent = (AgentCutscene*)agentModule->GetAgentByInternalId(AgentId.Cutscene);
-        if (cutsceneAgent == null || cutsceneAgent->SkipDialogAddonId == 0)
-            return false;
-
-        return LAddon.GetAddonById(cutsceneAgent->SkipDialogAddonId) == addon;
-    }
 
     /// <summary>
     /// Check if delivery window is open when we clicked resume.
@@ -139,7 +56,7 @@ partial class WorkshopPlugin
         else if (SelectSelectString("advance", 0, s => s.StartsWith("Advance to the next phase of production.", StringComparison.Ordinal)))
         {
             _pluginLog.Information("Phase is complete");
-            ArmWorkshopTransitionCutsceneSkip();
+            _workshopTransitionCutsceneSkip.Arm();
 
             _configuration.CurrentlyCraftedItem!.PhasesComplete++;
             _configuration.CurrentlyCraftedItem!.ContributedItemsInCurrentPhase = new();
@@ -151,14 +68,14 @@ partial class WorkshopPlugin
         else if (SelectSelectString("complete", 0, s => s.StartsWith("Complete the construction of", StringComparison.Ordinal)))
         {
             _pluginLog.Information("Item is almost complete, confirming last cutscene");
-            ArmWorkshopTransitionCutsceneSkip();
+            _workshopTransitionCutsceneSkip.Arm();
             CurrentStage = Stage.TargetFabricationStation;
             _continueAt = DateTime.Now.AddSeconds(3);
         }
         else if (SelectSelectString("collect", 0, s => s == "Collect finished product."))
         {
             _pluginLog.Information("Item is complete");
-            ClearWorkshopTransitionCutsceneSkip();
+            _workshopTransitionCutsceneSkip.Clear();
             CurrentStage = Stage.ConfirmCollectProduct;
             _continueAt = DateTime.Now.AddSeconds(0.25);
         }
@@ -232,69 +149,7 @@ partial class WorkshopPlugin
         }
     }
 
-    private unsafe void RequestPostSetup(AddonEvent type, AddonArgs addon)
-    {
-        var addonRequest = (AddonRequest*)addon.Addon.Address;
-        _pluginLog.Verbose($"{nameof(RequestPostSetup)}: {CurrentStage}, {addonRequest->EntryCount}");
-        if (CurrentStage != Stage.OpenRequestItemWindow)
-            return;
-
-        if (addonRequest->EntryCount != 1)
-            return;
-
-        _fallbackAt = DateTime.MaxValue;
-        CurrentStage = Stage.OpenRequestItemSelect;
-        var contributeMaterial = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 2 },
-            new() { Type = AtkValueType.UInt, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 44 },
-            new() { Type = AtkValueType.UInt, UInt = 0 }
-        };
-        addonRequest->AtkUnitBase.FireCallback(4, contributeMaterial);
-    }
-
-    private unsafe void ContextIconMenuPostReceiveEvent(AddonEvent type, AddonArgs addon)
-    {
-        if (CurrentStage != Stage.OpenRequestItemSelect)
-            return;
-
-        CurrentStage = Stage.ConfirmRequestItemWindow;
-        var selectSlot = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.Int, Int = 0 /* slot */ },
-            new() { Type = AtkValueType.UInt, UInt = 20802 /* probably the item's icon */ },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = 0, Int = 0 },
-        };
-        ((AddonContextIconMenu*)addon.Addon.Address)->AtkUnitBase.FireCallback(5, selectSlot);
-    }
-
-    private unsafe void RequestPostRefresh(AddonEvent type, AddonArgs addon)
-    {
-        _pluginLog.Verbose($"{nameof(RequestPostRefresh)}: {CurrentStage}");
-        if (CurrentStage != Stage.ConfirmRequestItemWindow)
-            return;
-
-        var addonRequest = (AddonRequest*)addon.Addon.Address;
-        if (addonRequest->EntryCount != 1)
-            return;
-
-        CurrentStage = Stage.ConfirmMaterialDelivery;
-        var closeWindow = stackalloc AtkValue[]
-        {
-            new() { Type = AtkValueType.Int, Int = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 },
-            new() { Type = AtkValueType.UInt, UInt = 0 }
-        };
-        addonRequest->AtkUnitBase.FireCallback(4, closeWindow);
-        addonRequest->AtkUnitBase.Close(false);
-        _externalPluginHandler.RestoreTextAdvance();
-    }
-
-    private unsafe void ConfirmMaterialDeliveryFollowUp()
+    internal unsafe void ConfirmMaterialDeliveryFollowUp()
     {
         AtkUnitBase* addonMaterialDelivery = GetMaterialDeliveryAddon();
         if (addonMaterialDelivery == null)

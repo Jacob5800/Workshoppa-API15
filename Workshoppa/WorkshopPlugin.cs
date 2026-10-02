@@ -40,6 +40,8 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
     private readonly ExternalPluginHandler _externalPluginHandler;
     private readonly WorkshopCache _workshopCache;
     private readonly GameStrings _gameStrings;
+    private readonly WorkshopTransitionCutsceneSkip _workshopTransitionCutsceneSkip;
+    private readonly WorkshopAddonEventHandler _addonEventHandler;
 
     private readonly MainWindow _mainWindow;
     private readonly ConfigWindow _configWindow;
@@ -50,6 +52,24 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
     private Stage _currentStageInternal = Stage.Stopped;
     private DateTime _continueAt = DateTime.MinValue;
     private DateTime _fallbackAt = DateTime.MaxValue;
+
+    internal DateTime FallbackAt
+    {
+        get => _fallbackAt;
+        set => _fallbackAt = value;
+    }
+
+    internal DateTime ContinueAt
+    {
+        get => _continueAt;
+        set => _continueAt = value;
+    }
+
+    internal IPluginLog PluginLog => _pluginLog;
+    internal GameStrings GameStrings => _gameStrings;
+    internal RepairKitWindow RepairKitWindow => _repairKitWindow;
+    internal CeruleumTankWindow CeruleumTankWindow => _ceruleumTankWindow;
+    internal WorkshopTransitionCutsceneSkip CutsceneSkip => _workshopTransitionCutsceneSkip;
 
     public WorkshopPlugin(IDalamudPluginInterface pluginInterface, IGameGui gameGui, IFramework framework,
         ICondition condition, IClientState clientState, IObjectTable objectTable, IDataManager dataManager,
@@ -70,6 +90,8 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
         _chatGui = chatGui;
 
         _externalPluginHandler = new ExternalPluginHandler(_pluginInterface, _pluginLog);
+        _workshopTransitionCutsceneSkip = new WorkshopTransitionCutsceneSkip(_condition, _pluginLog);
+        _addonEventHandler = new WorkshopAddonEventHandler(this, _pluginLog);
         _configuration = (Configuration?)_pluginInterface.GetPluginConfig() ?? new Configuration();
         _workshopCache = new WorkshopCache(dataManager, _pluginLog);
         _gameStrings = new(dataManager, _pluginLog);
@@ -110,16 +132,18 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
             HelpMessage = "Fill your inventory with a given number of ceruleum tank stacks.",
         });
 
-        _addonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectYesno", SelectYesNoPostSetup);
-        _addonLifecycle.RegisterListener(AddonEvent.PostSetup, "Request", RequestPostSetup);
-        _addonLifecycle.RegisterListener(AddonEvent.PostRefresh, "Request", RequestPostRefresh);
-        _addonLifecycle.RegisterListener(AddonEvent.PostUpdate, "ContextIconMenu", ContextIconMenuPostReceiveEvent);
+        _addonLifecycle.RegisterListener(AddonEvent.PostSetup, "SelectYesno",
+            _addonEventHandler.SelectYesNoPostSetup);
+        _addonLifecycle.RegisterListener(AddonEvent.PostSetup, "Request", _addonEventHandler.RequestPostSetup);
+        _addonLifecycle.RegisterListener(AddonEvent.PostRefresh, "Request", _addonEventHandler.RequestPostRefresh);
+        _addonLifecycle.RegisterListener(AddonEvent.PostUpdate, "ContextIconMenu",
+            _addonEventHandler.ContextIconMenuPostReceiveEvent);
     }
 
     internal Stage CurrentStage
     {
         get => _currentStageInternal;
-        private set
+        set
         {
             if (_currentStageInternal != value)
             {
@@ -128,7 +152,7 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
             }
 
             if (value is Stage.Stopped or Stage.RequestStop)
-                ClearWorkshopTransitionCutsceneSkip();
+                _workshopTransitionCutsceneSkip.Clear();
 
             if (value != Stage.Stopped)
                 _mainWindow.Flags |= ImGuiWindowFlags.NoCollapse;
@@ -142,7 +166,7 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
         _retainerDepositWindow.UpdateRetainerWindowState();
         _retainerDepositWindow.UpdateTransfer();
 
-        TrySkipWorkshopTransitionCutscene();
+        _workshopTransitionCutsceneSkip.TrySkip();
 
         if (!_clientState.IsLoggedIn ||
             !WorkshopTerritories.Contains((ushort)_clientState.TerritoryType) ||
@@ -277,6 +301,9 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
             x => x.WorkshopItemId == _configuration.CurrentlyCraftedItem!.WorkshopItemId);
     }
 
+    internal void RestoreTextAdvanceAfterRequest()
+        => _externalPluginHandler.RestoreTextAdvance();
+
     private void ProcessCommand(string command, string arguments)
     {
         if (arguments is "c" or "config")
@@ -306,10 +333,12 @@ public sealed partial class WorkshopPlugin : IDalamudPlugin
 
     public void Dispose()
     {
-        _addonLifecycle.UnregisterListener(AddonEvent.PostUpdate, "ContextIconMenu", ContextIconMenuPostReceiveEvent);
-        _addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, "Request", RequestPostRefresh);
-        _addonLifecycle.UnregisterListener(AddonEvent.PostSetup, "Request", RequestPostSetup);
-        _addonLifecycle.UnregisterListener(AddonEvent.PostSetup, "SelectYesno", SelectYesNoPostSetup);
+        _addonLifecycle.UnregisterListener(AddonEvent.PostUpdate, "ContextIconMenu",
+            _addonEventHandler.ContextIconMenuPostReceiveEvent);
+        _addonLifecycle.UnregisterListener(AddonEvent.PostRefresh, "Request", _addonEventHandler.RequestPostRefresh);
+        _addonLifecycle.UnregisterListener(AddonEvent.PostSetup, "Request", _addonEventHandler.RequestPostSetup);
+        _addonLifecycle.UnregisterListener(AddonEvent.PostSetup, "SelectYesno",
+            _addonEventHandler.SelectYesNoPostSetup);
         _commandManager.RemoveHandler("/fill-tanks");
         _commandManager.RemoveHandler("/buy-tanks");
         _commandManager.RemoveHandler("/workshoppa");
