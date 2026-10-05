@@ -1,6 +1,6 @@
 # Workshoppa API 15
 
-Workshoppa version 9.3.10.0, built for Dalamud API 15. This continuation includes a retainer depositor with item exclusions and automatically skips the short cutscenes between workshop production phases when the game exposes its skip prompt.
+Workshoppa version 9.3.11.0, built for Dalamud API 15. This continuation includes a retainer depositor with item exclusions and automatically skips the short cutscenes between workshop production phases when the game exposes its skip prompt. The plugin listing is credited to Jacob5800, and the main window includes a direct Workshoppa Discord link.
 
 ## Credit and permission
 

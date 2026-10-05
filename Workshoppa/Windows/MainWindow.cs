@@ -13,6 +13,7 @@ using Dalamud.Interface.Utility.Raii;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
+using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using LLib;
 using LLib.ImGui;
@@ -90,6 +91,12 @@ internal sealed class MainWindow : LWindow, IPersistableWindowConfig
             ImGui.EndDisabled();
             if (ImGui.MenuItem("Retainer Deposit"))
                 _retainerDepositWindow.ToggleFromMenu();
+
+            ImGui.SameLine(ImGui.GetWindowWidth() - ImGui.GetFrameHeightWithSpacing());
+            if (ImGuiComponents.IconButton(FontAwesomeIcon.Comments))
+                Util.OpenLink("https://discord.gg/TTPZ82xaUd");
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Join the Workshoppa Discord");
 
             ImGui.EndMenuBar();
         }
