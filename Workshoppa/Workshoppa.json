@@ -1,8 +1,9 @@
-﻿{
+{
   "Name": "Workshoppa",
   "Author": "Jacob5800",
   "Punchline": "Better Company Workshop Turn-In",
   "Description": "Dalamud API 15 continuation of Workshoppa. Automates workshop material turn-ins, offers retainer deposits with item exclusions, and can skip cutscenes between production phases.",
   "RepoUrl": "https://github.com/Jacob5800/Workshoppa-API15",
-  "IconUrl": "https://plugins.carvel.li/icons/Workshoppa.png"
+  "IconUrl": "https://plugins.carvel.li/icons/Workshoppa.png",
+  "Changelog": "### 9.3.12.0\n- Updated compatibility for FFXIV patch 7.57.\n- Added a Discord shortcut to the main window."
 }

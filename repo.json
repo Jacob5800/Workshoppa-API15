@@ -3,7 +3,7 @@
     "Author": "Jacob5800",
     "Name": "Workshoppa",
     "InternalName": "Workshoppa",
-    "AssemblyVersion": "9.3.11.0",
+    "AssemblyVersion": "9.3.12.0",
     "Description": "API 15 continuation of Workshoppa. Automates workshop material turn-ins, offers retainer deposits with item exclusions, and can skip cutscenes between production phases.",
     "Punchline": "Better Company Workshop Turn-In",
     "RepoUrl": "https://github.com/Jacob5800/Workshoppa-API15",
@@ -17,9 +17,10 @@
       "Crafting",
       "Utility"
     ],
-    "DownloadLinkInstall": "https://raw.githubusercontent.com/Jacob5800/Workshoppa-API15/main/Workshoppa-9.3.11.0-API15.zip",
-    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Jacob5800/Workshoppa-API15/main/Workshoppa-9.3.11.0-API15.zip",
+    "DownloadLinkInstall": "https://raw.githubusercontent.com/Jacob5800/Workshoppa-API15/main/Workshoppa-9.3.12.0-API15.zip",
+    "DownloadLinkUpdate": "https://raw.githubusercontent.com/Jacob5800/Workshoppa-API15/main/Workshoppa-9.3.12.0-API15.zip",
     "DownloadLinkTesting": null,
-    "LastUpdate": 1791223217
+    "LastUpdate": 1791912392,
+    "Changelog": "### 9.3.12.0\n- Updated compatibility for FFXIV patch 7.57.\n- Added a Discord shortcut to the main window."
   }
 ]
