@@ -1,5 +1,10 @@
 # Workshoppa API 15
 
+> **Moved to the shared plugin collection.** Workshoppa API 15 source and future releases are now maintained at [Jacob5800/DalamudPlugins](https://github.com/Jacob5800/DalamudPlugins/tree/main/plugins/Workshoppa). This repository is a historical copy.
+>
+> Add `https://raw.githubusercontent.com/Jacob5800/DalamudPlugins/main/repo.json` to Dalamud's custom repositories and remove the old Workshoppa-API15 repository URL. Your Workshoppa settings are retained.
+
+
 Workshoppa version 9.3.12.0, built for Dalamud API 15 and FFXIV patch 7.57. This continuation includes a retainer depositor with item exclusions and automatically skips the short cutscenes between workshop production phases when the game exposes its skip prompt. The plugin listing is credited to Jacob5800, and the main window includes a direct Workshoppa Discord link.
 
 ## Credit and permission

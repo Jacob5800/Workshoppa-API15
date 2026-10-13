@@ -1,7 +1,5 @@
-# Workshoppa update workflow
+# Historical Workshoppa repository
 
-- When making a Workshoppa update intended for use in Dalamud, update both the repository release package and the local dev plugin. Updating source files alone does not update either installation.
-- In restricted Codex workspaces, the Dalamud SDK resolver reads `%APPDATA%/NuGet/NuGet.Config` before repository-level NuGet settings are applied. If a normal build reports access denied for that file or cannot resolve `Dalamud.NET.Sdk`, rerun the build with approved filesystem access to that config and `%APPDATA%/XIVLauncher/addon/Hooks/dev`; do not add a repository `NuGet.Config` as a workaround or copy the user config (the local-config test did not bypass the resolver).
-- Bump `Workshoppa/Workshoppa.csproj` `<Version>` and keep `repo.json` `AssemblyVersion`, download-link zip names, `LastUpdate`, the root release zip, and the README version in sync.
-- Build Release, create the versioned root zip from the resulting `Workshoppa/dist` package, then inspect `%APPDATA%/XIVLauncher/dalamudConfig.json` `DevPluginLoadLocations` and sync the active, enabled Workshoppa DLL path. The current entry is `%APPDATA%/XIVLauncher/devPlugins/Workshoppa-9.3-API15/Workshoppa.dll`; a path under the `devPlugins` folder is active here because it is explicitly registered, not because Dalamud scans that legacy folder automatically. Verify the copied files match.
-- If the user wants Dalamud to offer an update, ensure the manifest and zip are published on the configured GitHub `main` branch; local manifest changes alone cannot create an update notice. Treat a direct request to make the update show in Dalamud as authorization to publish that update.
+- Workshoppa API 15 canonical source and release location is C:\Users\matth\OneDrive\Documenten\GitHub\DalamudPlugins\plugins\Workshoppa.
+- Do not edit plugin source, versions, packages, or releases here. Preserve this historical copy; only migration documentation and repository instructions may change.
+- Future releases use the shared DalamudPlugins feed and Workshoppa-v<version> tags.
